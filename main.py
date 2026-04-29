@@ -82,9 +82,9 @@ with dpg.font_registry():
     default_font = dpg.add_font(
         os.path.join(font_dir_path, "SFMono Regular Nerd Font Complete.otf"), 14
     )
-    bold_font = dpg.add_font(
-        os.path.join(font_dir_path, "SFMono Bold Nerd Font Complete.otf"), 14
-    )
+    # bold_font = dpg.add_font(
+    #     os.path.join(font_dir_path, "SFMono Bold Nerd Font Complete.otf"), 14
+    # )
 
 
 def input_window(
@@ -104,6 +104,27 @@ def input_window(
 
 enc_file = None
 curr_path = []
+
+
+def save_settings_callback():
+    dpg.set_global_font_scale(dpg.get_value("font_scale_input"))
+    enc_file.copy_files_on_add = dpg.get_value("copy_files_chechbox")
+    # dpg.hide_item("settings_window")
+
+
+with input_window("Settings", "settings_window"):
+    dpg.add_input_float(
+        label="Font Scale",
+        tag="font_scale_input",
+        default_value=dpg.get_global_font_scale(),
+        min_value=0.1,
+        max_value=3.0,
+        format="%.1f",
+    )
+    dpg.add_checkbox(
+        label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
+    )
+    dpg.add_button(label="Save", callback=save_settings_callback)
 
 
 def save_file_callback():
@@ -430,6 +451,10 @@ with dpg.window(tag="main_window", show=False):
             )
             dpg.add_button(label="Delete Folder", callback=delete_folder_btn_callback)
 
+        dpg.add_button(
+            label="Settings", callback=lambda: dpg.show_item("settings_window")
+        )
+
     dpg.add_table(
         resizable=True,
         header_row=False,
@@ -440,7 +465,7 @@ with dpg.window(tag="main_window", show=False):
         height=-1,
         tag="file_tree_table",
     )
-    dpg.bind_item_theme(dpg.last_item(), table_theme)
+    dpg.bind_item_theme("file_tree_table", table_theme)
 
 
 def load_file_dialog_callback(sender, app_data):
@@ -474,6 +499,7 @@ def load_file_callback():
     except ValueError:
         dpg.set_value("load_file_error", "Incorrect password.")
     except Exception as e:
+        print(e)
         dpg.set_value("load_file_error", str(e))
 
 
