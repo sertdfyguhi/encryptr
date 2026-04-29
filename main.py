@@ -120,10 +120,16 @@ with input_window("Settings", "settings_window"):
         min_value=0.1,
         max_value=3.0,
         format="%.1f",
+        width=WINDOW_WIDTH / 5,
     )
     dpg.add_checkbox(
         label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
     )
+    with dpg.tooltip("copy_files_chechbox"):
+        dpg.add_text(
+            "If enabled, copies newly added files into a temporary folder\nto make sure the file isn't edited or deleted.",
+        )
+
     dpg.add_button(label="Save", callback=save_settings_callback)
 
 
