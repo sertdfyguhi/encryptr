@@ -6,6 +6,8 @@ import shutil
 import time
 import os
 
+FILE_SIG = b"ENCR\x01\x02"
+
 PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR_PATH = os.path.join(PY_FILE_DIR, "temp")
 
@@ -14,7 +16,13 @@ if not os.path.isdir(TEMP_DIR_PATH):
 
 
 class EncryptrFile:
-    def __init__(self, file_path: str, password: str, copy_files_on_add: bool = False):
+    def __init__(
+        self,
+        file_path: str,
+        password: str,
+        copy_files_on_add: bool = False,
+        ignore_file_sig: bool = False,
+    ):
         self._file_path = file_path
         self.copy_files_on_add = copy_files_on_add
         self._has_edited_files = False
@@ -22,6 +30,9 @@ class EncryptrFile:
 
         if os.path.isfile(file_path):
             with open(file_path, "rb") as f:
+                if not ignore_file_sig and f.read(len(FILE_SIG)) != FILE_SIG:
+                    raise ValueError("File isn't an Encryptr file.")
+
                 f.seek(-16, os.SEEK_END)
                 salt = f.read(16)
                 self.set_password(password, salt)
@@ -134,6 +145,7 @@ class EncryptrFile:
             )
 
             with open(temp_file_path, "wb") as write_file:
+                write_file.write(FILE_SIG)
                 self._write_files_and_update_offset(self._root, read_file, write_file)
                 self._write_metadata(write_file)
 
@@ -247,11 +259,14 @@ class EncryptrFile:
 
     def delete_dir(self, path: list[str]):
         if len(path) == 0:
-            self._root.clear()
+            if self._root:
+                self._root.clear()
+                self._has_edited_files = True
         else:
             directory = self.get_from_path(path[:-1])
 
             if path[-1] in directory:
-                del directory[path[-1]]
+                if not directory[path[-1]]:
+                    self._has_edited_files = True
 
-        self._has_edited_files = True
+                del directory[path[-1]]
