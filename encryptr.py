@@ -1,14 +1,17 @@
+from Crypto.Cipher import AES, ChaCha20_Poly1305
 from argon2.low_level import hash_secret_raw
-from Crypto.Cipher import AES
 from argon2 import Type
 import tempfile
-import pickle
 import atexit
 import shutil
+import json
 import time
 import os
 
 FILE_SIG = b"ENCR\x01\x02"
+FORMAT_VERSION = 1
+ALGOS = {1: "AES256-GCM", 2: "ChaCha20-Poly1305"}
+ALGOS_NAME_KEY = {"AES256-GCM": 1, "ChaCha20-Poly1305": 2}
 
 TEMP_DIR_PATH = tempfile.mkdtemp()
 
@@ -19,7 +22,6 @@ class EncryptrFile:
         file_path: str,
         password: str,
         copy_files_on_add: bool = False,
-        ignore_file_sig: bool = False,
     ):
         self._file_path = file_path
         self.copy_files_on_add = copy_files_on_add
@@ -28,22 +30,29 @@ class EncryptrFile:
 
         if os.path.isfile(file_path):
             with open(file_path, "rb") as f:
-                if not ignore_file_sig and f.read(len(FILE_SIG)) != FILE_SIG:
+                if f.read(len(FILE_SIG)) != FILE_SIG:
                     raise ValueError("File isn't an Encryptr file.")
 
-                f.seek(-16, os.SEEK_END)
+                file_format_ver = int.from_bytes(f.read(8), "big")
+                self._algo_type = int.from_bytes(f.read(8), "big")
+                if self._algo_type not in ALGOS:
+                    raise ValueError("Algorithm type unsupported.")
+                self._saved_algo_type = self._algo_type
+
                 salt = f.read(16)
                 self.set_password(password, salt)
                 self._saved_key = self._key
 
-                f.seek(-16, os.SEEK_END)
-                pickled_root = self._decrypt_chunk_from_file(f, reverse=True)
-                self._root = pickle.loads(pickled_root)
+                f.seek(0, os.SEEK_END)
+                root_json = self._decrypt_chunk_from_file(f, reverse=True)
+                self._root = json.loads(root_json)
                 if type(self._root) != dict:
-                    raise ValueError("unpickled data is not a dict")
+                    raise ValueError("Incorrect metadata format.")
         else:
             self.set_password(password)
             self._root = {}
+            self._algo_type = 1  # AES
+            self._saved_key = None
 
     @property
     def root(self):
@@ -52,6 +61,10 @@ class EncryptrFile:
     @property
     def file_path(self):
         return self._file_path
+
+    @property
+    def algo_type(self):
+        return ALGOS[self._algo_type]
 
     def set_password(self, password: str, salt: bytes = os.urandom(16)):
         if password == "":
@@ -68,12 +81,33 @@ class EncryptrFile:
             type=Type.ID,
         )
 
+    def change_algo_type(self, algo: str):
+        if algo not in ALGOS_NAME_KEY:
+            raise ValueError(f'"{algo}" is not an algorithm type.')
+
+        self._algo_type = ALGOS_NAME_KEY[algo]
+
+    def _make_algo_class(
+        self, key: bytes, algo_type: int, nonce: bytes = os.urandom(12)
+    ):
+        match algo_type:
+            case 1:
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
+            case 2:
+                cipher = ChaCha20_Poly1305.new(key=key, nonce=nonce)
+
+            case _:
+                raise ValueError("Unknown algorithm type.")
+
+        return cipher
+
     # nonce 12, tag 16, length 8, ciphertext
     def _encrypt_chunk_and_write(self, file, data: bytes, reverse: bool = False):
-        aes = AES.new(self._key, AES.MODE_GCM, nonce=os.urandom(12))
-        ciphertext, tag = aes.encrypt_and_digest(data)
+        cipher = self._make_algo_class(self._key, self._algo_type)
+        ciphertext, tag = cipher.encrypt_and_digest(data)
+        metadata = cipher.nonce + tag + len(ciphertext).to_bytes(8, "big")
 
-        metadata = aes.nonce + tag + len(ciphertext).to_bytes(8, "big")
         if not reverse:
             file.write(metadata)
             file.write(ciphertext)
@@ -92,8 +126,8 @@ class EncryptrFile:
         if reverse:
             file.seek(-(12 + 16 + 8 + length), os.SEEK_CUR)
 
-        aes = AES.new(self._saved_key, AES.MODE_GCM, nonce=nonce)
-        return aes.decrypt_and_verify(file.read(length), tag)
+        cipher = self._make_algo_class(self._saved_key, self._saved_algo_type, nonce)
+        return cipher.decrypt_and_verify(file.read(length), tag)
 
     def _copy_chunk_into_file(self, read_file, write_file):
         nonce_and_tag = read_file.read(12 + 16)
@@ -112,7 +146,7 @@ class EncryptrFile:
                 read_file.seek(value)
                 directory[name] = write_file.tell()
 
-                if self._saved_key == self._key:  # password hasn't changed
+                if self._saved_key == self._key:  # password hasn't c´hanged
                     self._copy_chunk_into_file(read_file, write_file)
                 else:
                     data = self._decrypt_chunk_from_file(read_file)
@@ -125,9 +159,8 @@ class EncryptrFile:
                 self._write_files_and_update_offset(value, read_file, write_file)
 
     def _write_metadata(self, file):
-        pickled_root = pickle.dumps(self._root)
-        self._encrypt_chunk_and_write(file, pickled_root, reverse=True)
-        file.write(self._salt)
+        root_json = json.dumps(self._root)
+        self._encrypt_chunk_and_write(file, root_json, reverse=True)
 
     def save(self, file_path: str = None):
         if file_path is None:
@@ -136,19 +169,35 @@ class EncryptrFile:
         save_start = time.perf_counter()
 
         # if files have been edited or password has been changed, rewrite file data
-        if self._has_edited_files or self._key != self._saved_key:
-            temp_file_path = os.path.join(TEMP_DIR_PATH, os.path.basename(file_path))
-            read_file = (
-                open(self._file_path, "rb") if os.path.isfile(self._file_path) else None
-            )
+        if (
+            self._saved_key is None
+            or self._has_edited_files
+            or self._key != self._saved_key
+        ):
+            if self._saved_key is None:
+                temp_file_path = self._file_path
+                read_file = None
+            else:
+                temp_file_path = os.path.join(
+                    TEMP_DIR_PATH, os.path.basename(file_path)
+                )
+                read_file = (
+                    open(self._file_path, "rb")
+                    if os.path.isfile(self._file_path)
+                    else None
+                )
 
             with open(temp_file_path, "wb") as write_file:
                 write_file.write(FILE_SIG)
+                write_file.write(FORMAT_VERSION.to_bytes(8, "big"))
+                write_file.write(self._algo_type.to_bytes(8, "big"))
+                write_file.write(self._salt)
                 self._write_files_and_update_offset(self._root, read_file, write_file)
                 self._write_metadata(write_file)
 
-            shutil.move(temp_file_path, file_path)
-            read_file.close()
+            if self._saved_key is not None:
+                shutil.move(temp_file_path, file_path)
+                read_file.close()
         else:
             if file_path != self._file_path:
                 shutil.copy(self._file_path, file_path)
@@ -170,6 +219,7 @@ class EncryptrFile:
         print(f"saved in {time.perf_counter() - save_start:.03f}s")
 
         self._saved_key = self._key
+        self._saved_algo_type = self._algo_type
         self._has_edited_files = False
         self._new_files = []
         if file_path:

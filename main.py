@@ -1,4 +1,4 @@
-from encryptr import EncryptrFile, TEMP_DIR_PATH
+from encryptr import EncryptrFile, ALGOS, TEMP_DIR_PATH
 import dearpygui.dearpygui as dpg
 import utils
 import time
@@ -72,37 +72,56 @@ def save_settings_callback():
     dpg.set_global_font_scale(dpg.get_value("font_scale_input"))
     enc_file.copy_files_on_add = dpg.get_value("copy_files_chechbox")
     auto_lock = dpg.get_value("auto_lock_checkbox")
+    enc_file.change_algo_type(dpg.get_value("enc_method_combo"))
     # dpg.hide_item("settings_window")
 
 
 with input_window("Settings", "settings_window"):
-    dpg.add_input_float(
-        label="Font Scale",
-        tag="font_scale_input",
-        default_value=dpg.get_global_font_scale(),
-        min_value=0.1,
-        max_value=3.0,
-        format="%.1f",
-        width=WINDOW_WIDTH / 5,
-    )
+    dpg.add_text("Global Settings")
 
-    dpg.add_checkbox(
-        label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
-    )
-    with dpg.tooltip("copy_files_chechbox"):
-        dpg.add_text(
-            "If enabled, copies newly added files into a temporary folder\nto make sure the file isn't edited or deleted.",
+    with dpg.group(indent=20):
+        dpg.add_input_float(
+            label="Font Scale",
+            tag="font_scale_input",
+            default_value=dpg.get_global_font_scale(),
+            min_value=0.1,
+            max_value=3.0,
+            format="%.1f",
+            width=WINDOW_WIDTH / 5,
         )
 
-    dpg.add_checkbox(
-        label="Lock on Inactivity",
-        default_value=auto_lock,
-        tag="auto_lock_checkbox",
-    )
-    with dpg.tooltip("auto_lock_checkbox"):
-        dpg.add_text(
-            "If enabled, auto unloads the file when window is unfocused.",
+        dpg.add_checkbox(
+            label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
         )
+        with dpg.tooltip("copy_files_chechbox"):
+            dpg.add_text(
+                "If enabled, copies newly added files into a temporary folder\nto make sure the file isn't edited or deleted.",
+            )
+
+        dpg.add_checkbox(
+            label="Lock on Inactivity",
+            default_value=auto_lock,
+            tag="auto_lock_checkbox",
+        )
+        with dpg.tooltip("auto_lock_checkbox"):
+            dpg.add_text(
+                "If enabled, auto unloads the file when window is unfocused.",
+            )
+
+    dpg.add_spacer(height=9)
+
+    dpg.add_text("File Settings")
+
+    with dpg.group(indent=20):
+        dpg.add_combo(
+            items=tuple(ALGOS.values()),
+            default_value="AES256-GCM",
+            label="Encryption Method",
+            tag="enc_method_combo",
+            width=WINDOW_WIDTH / 5,
+        )
+
+    dpg.add_spacer(height=9)
 
     dpg.add_button(label="Save", callback=save_settings_callback)
 
@@ -475,6 +494,7 @@ def load_file_callback():
         enc_file = EncryptrFile(
             dpg.get_value("file_path_input"), dpg.get_value("password_input")
         )
+        print(enc_file.algo_type)
 
         update_file_tree_table()
         dpg.hide_item("file_window")
@@ -483,6 +503,7 @@ def load_file_callback():
         incorrect_tries = 0
         dpg.set_value("password_input", "")
         dpg.set_value("load_file_error", "")
+        dpg.set_value("enc_method_combo", enc_file.algo_type)
         dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
     except ValueError:
         incorrect_tries += 1
