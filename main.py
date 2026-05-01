@@ -1,57 +1,17 @@
-from encryptr import EncryptrFile, PY_FILE_DIR, TEMP_DIR_PATH
+from encryptr import EncryptrFile, TEMP_DIR_PATH
 import dearpygui.dearpygui as dpg
-import subprocess
-import platform
-import atexit
-import shutil
+import utils
+import time
 import os
+import gc
+
+PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 
-FOLDER_ICON = "\uf07b"
-DEFAULT_FILE_ICON = "\uf15b"
-FILE_ICONS = {
-    ("txt", "md", "rtf", "log"): "\uf0f6",
-    (
-        "png",
-        "jpg",
-        "jpeg",
-        "webp",
-        "svg",
-        "gif",
-        "raw",
-        "tiff",
-        "tif",
-        "heic",
-        "heif",
-        "bmp",
-    ): "\uf03e",
-    ("py", "pyc"): "\ue606",
-    ("cpp", "c++", "cxx", "cc", "hpp", "h++", "hxx", "hh"): "\ue61d",
-    ("c", "h"): "\ue61e",
-    ("js", "jsx"): "\ue781",
-    ("ts", "tsx"): "\ue8ca",
-    ("html", "htm"): "\ue736",
-    ("css"): "\ue749",
-    ("json"): "\ue60b",
-    ("java", "class", "jar"): "\ue738",
-    ("mp3", "wav", "flac", "m4a", "aac", "ogg"): "\ue638",
-    ("mp4", "mkv", "mov", "avi", "webm"): "\uf03d",
-    ("pdf"): "\uf1c1",
-    ("zip", "tar", "7z", "rar", "gz"): "\uf1c6",
-    ("exe", "sh", "bat"): "\ue795",
-    ("app"): "\ue711",
-    ("enc"): "\udb80\ude21",
-}
-
-
-def get_file_icon(extension: str):
-    for exts, icon in FILE_ICONS.items():
-        if extension in exts:
-            return icon
-
-    return DEFAULT_FILE_ICON
+MAX_TRIES_BEFORE_RATE_LIMIT = 3
+RATE_LIMIT_TIME = 30
 
 
 dpg.create_context()
@@ -78,9 +38,8 @@ with dpg.theme() as table_theme:
 
 
 with dpg.font_registry():
-    font_dir_path = os.path.join(PY_FILE_DIR, "font")
     default_font = dpg.add_font(
-        os.path.join(font_dir_path, "SFMono Regular Nerd Font Complete.otf"), 14
+        os.path.join(PY_FILE_DIR, "font", "SFMono Regular Nerd Font Complete.otf"), 14
     )
     # bold_font = dpg.add_font(
     #     os.path.join(font_dir_path, "SFMono Bold Nerd Font Complete.otf"), 14
@@ -104,11 +63,15 @@ def input_window(
 
 enc_file = None
 curr_path = []
+auto_lock = False
 
 
 def save_settings_callback():
+    global auto_lock
+
     dpg.set_global_font_scale(dpg.get_value("font_scale_input"))
     enc_file.copy_files_on_add = dpg.get_value("copy_files_chechbox")
+    auto_lock = dpg.get_value("auto_lock_checkbox")
     # dpg.hide_item("settings_window")
 
 
@@ -122,12 +85,23 @@ with input_window("Settings", "settings_window"):
         format="%.1f",
         width=WINDOW_WIDTH / 5,
     )
+
     dpg.add_checkbox(
         label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
     )
     with dpg.tooltip("copy_files_chechbox"):
         dpg.add_text(
             "If enabled, copies newly added files into a temporary folder\nto make sure the file isn't edited or deleted.",
+        )
+
+    dpg.add_checkbox(
+        label="Lock on Inactivity",
+        default_value=auto_lock,
+        tag="auto_lock_checkbox",
+    )
+    with dpg.tooltip("auto_lock_checkbox"):
+        dpg.add_text(
+            "If enabled, auto unloads the file when window is unfocused.",
         )
 
     dpg.add_button(label="Save", callback=save_settings_callback)
@@ -239,7 +213,7 @@ with input_window("Save as...", "save_as_window", modal=False):
         )
 
     dpg.add_input_text(
-        width=WINDOW_WIDTH / 5, tag="save_as_name_input", label="File Name"
+        label="File Name", width=WINDOW_WIDTH / 5, tag="save_as_name_input"
     )
     dpg.add_button(
         label="Save File", tag="save_as_file_button", callback=save_as_callback
@@ -250,23 +224,22 @@ with input_window("Save as...", "save_as_window", modal=False):
 
 def open_file(dirname: list[str], name: str):
     def open_file_callback():
-        temp_file_path = os.path.join(TEMP_DIR_PATH, str(len(dirname)) + name)
-
         dpg.set_item_label("open_file_btn", "Opening...")
 
-        if not os.path.isfile(temp_file_path):
-            with open(temp_file_path, "wb") as f:
-                f.write(enc_file.get_file_data(dirname, name))
+        directory = enc_file.get_from_path(dirname)
 
-        if platform.system() == "Windows":
-            os.startfile(temp_file_path)
-        elif platform.system() == "Darwin":
-            subprocess.run(["open", temp_file_path])
-        else:
-            subprocess.run(["xdg-open", temp_file_path])
+        if type(directory[name]) == int:
+            temp_file_path = os.path.join(TEMP_DIR_PATH, str(len(dirname)) + name)
+
+            if not os.path.isfile(temp_file_path):
+                with open(temp_file_path, "wb") as f:
+                    f.write(enc_file.get_file_data(dirname, name))
+
+            utils.open_file(temp_file_path)
+        elif type(directory[name]) == str:
+            utils.open_file(directory[name])
 
         dpg.set_item_label("open_file_btn", "Open")
-
         dpg.delete_item(file_window)
 
     def rename_file_callback():
@@ -313,10 +286,10 @@ def open_dir(dirname: list[str], name: str):
 
 def add_file_to_cell(name: str, value, dirname: list[str], parent: str = 0):
     if type(value) == dict:
-        icon = FOLDER_ICON
+        icon = utils.FOLDER_ICON
         callback = lambda: open_dir(dirname, name)
     else:
-        icon = get_file_icon(os.path.splitext(name)[1][1:].lower())
+        icon = utils.get_file_icon(os.path.splitext(name)[1][1:].lower())
         callback = lambda: open_file(dirname, name)
 
     label = f"{icon} {name}"
@@ -448,13 +421,9 @@ with dpg.window(tag="main_window", show=False):
                 label="Add File", callback=lambda: dpg.show_item("add_file_dialog")
             )
             dpg.add_button(
-                label="New Folder",
-                callback=lambda: dpg.show_item("new_folder_window"),
+                label="New Folder", callback=lambda: dpg.show_item("new_folder_window")
             )
-            dpg.add_button(
-                label="Rename Folder",
-                callback=rename_folder_btn_callback,
-            )
+            dpg.add_button(label="Rename Folder", callback=rename_folder_btn_callback)
             dpg.add_button(label="Delete Folder", callback=delete_folder_btn_callback)
 
         dpg.add_button(
@@ -489,21 +458,43 @@ with dpg.file_dialog(
     dpg.add_file_extension(".enc")
 
 
+incorrect_tries = 0
+rate_limit_start = None
+
+
 def load_file_callback():
-    global enc_file
+    global enc_file, incorrect_tries, rate_limit_start
+
+    if (
+        incorrect_tries >= MAX_TRIES_BEFORE_RATE_LIMIT
+        and (time.time() - rate_limit_start) < RATE_LIMIT_TIME
+    ):
+        return
 
     try:
         enc_file = EncryptrFile(
             dpg.get_value("file_path_input"), dpg.get_value("password_input")
         )
 
-        dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
-        dpg.hide_item("file_window")
-
         update_file_tree_table()
+        dpg.hide_item("file_window")
         dpg.show_item("main_window")
+
+        incorrect_tries = 0
+        dpg.set_value("password_input", "")
+        dpg.set_value("load_file_error", "")
+        dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
     except ValueError:
-        dpg.set_value("load_file_error", "Incorrect password.")
+        incorrect_tries += 1
+
+        if incorrect_tries > MAX_TRIES_BEFORE_RATE_LIMIT:
+            rate_limit_start = time.time()
+            dpg.set_value(
+                "load_file_error",
+                f"Max incorrect tries reached ({MAX_TRIES_BEFORE_RATE_LIMIT}), please wait {RATE_LIMIT_TIME}s.",
+            )
+        else:
+            dpg.set_value("load_file_error", "Incorrect password.")
     except Exception as e:
         print(e)
         dpg.set_value("load_file_error", str(e))
@@ -526,18 +517,27 @@ with input_window("Load file...", "file_window", show=True, modal=False, no_clos
 
 dpg.bind_font(default_font)
 dpg.set_primary_window("main_window", True)
-
-
-def cleanup_temp():
-    shutil.rmtree(TEMP_DIR_PATH)
-    os.mkdir(TEMP_DIR_PATH)
-
-
-atexit.register(cleanup_temp)
-
+dpg.set_viewport_vsync(True)
 
 if __name__ == "__main__":
     dpg.setup_dearpygui()
     dpg.show_viewport()
-    dpg.start_dearpygui()
+
+    while dpg.is_dearpygui_running():
+        if (
+            auto_lock
+            and enc_file
+            and dpg.get_frame_count() % 30 == 0
+            and not utils.is_app_focused()
+        ):
+            enc_file = None
+            gc.collect()
+
+            curr_path = []
+            dpg.hide_item("main_window")
+            dpg.delete_item("file_tree_table", children_only=True)
+            dpg.show_item("file_window")
+
+        dpg.render_dearpygui_frame()
+
     dpg.destroy_context()

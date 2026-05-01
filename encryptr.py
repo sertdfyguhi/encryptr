@@ -1,18 +1,16 @@
 from argon2.low_level import hash_secret_raw
 from Crypto.Cipher import AES
 from argon2 import Type
+import tempfile
 import pickle
+import atexit
 import shutil
 import time
 import os
 
 FILE_SIG = b"ENCR\x01\x02"
 
-PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMP_DIR_PATH = os.path.join(PY_FILE_DIR, "temp")
-
-if not os.path.isdir(TEMP_DIR_PATH):
-    os.mkdir(TEMP_DIR_PATH)
+TEMP_DIR_PATH = tempfile.mkdtemp()
 
 
 class EncryptrFile:
@@ -266,7 +264,14 @@ class EncryptrFile:
             directory = self.get_from_path(path[:-1])
 
             if path[-1] in directory:
-                if not directory[path[-1]]:
+                if not directory[path[-1]]:  # if not empty
                     self._has_edited_files = True
 
                 del directory[path[-1]]
+
+
+def cleanup_temp():
+    shutil.rmtree(TEMP_DIR_PATH)
+
+
+atexit.register(cleanup_temp)
