@@ -44,8 +44,8 @@ class EncryptrFile:
                 self._saved_key = self._key
 
                 f.seek(0, os.SEEK_END)
-                root_json = self._decrypt_chunk_from_file(f, reverse=True)
-                self._root = json.loads(root_json)
+                raw_root_json = self._decrypt_chunk_from_file(f, reverse=True)
+                self._root = json.loads(raw_root_json.decode("ascii"))
                 if type(self._root) != dict:
                     raise ValueError("Incorrect metadata format.")
         else:
@@ -159,8 +159,8 @@ class EncryptrFile:
                 self._write_files_and_update_offset(value, read_file, write_file)
 
     def _write_metadata(self, file):
-        root_json = json.dumps(self._root)
-        self._encrypt_chunk_and_write(file, root_json, reverse=True)
+        root_json = json.dumps(self._root, separators=(",", ":"))
+        self._encrypt_chunk_and_write(file, root_json.encode("ascii"), reverse=True)
 
     def save(self, file_path: str = None):
         if file_path is None:

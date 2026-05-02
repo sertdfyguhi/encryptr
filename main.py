@@ -285,6 +285,24 @@ def open_file(dirname: list[str], name: str):
         update_file_tree_table()
         dpg.delete_item(file_window)
 
+    def extract_file_callback():
+        def extract_callback(sender, app_data):
+            extract_file_path = os.path.join(app_data["file_path_name"], name)
+
+            with open(extract_file_path, "wb") as f:
+                f.write(enc_file.get_file_data(dirname, name))
+
+            dpg.delete_item(extract_file_dialog)
+
+        extract_file_dialog = dpg.add_file_dialog(
+            label=f"Extract {name} to...",
+            directory_selector=True,
+            width=WINDOW_WIDTH / 2,
+            height=WINDOW_HEIGHT / 2,
+            callback=extract_callback,
+            cancel_callback=lambda: dpg.delete_item(extract_file_dialog),
+        )
+
     with input_window(
         f"Open {name}...", show=True, on_close=lambda: dpg.delete_item(file_window)
     ) as file_window:
@@ -294,6 +312,7 @@ def open_file(dirname: list[str], name: str):
             )
             dpg.add_button(label="Rename", callback=rename_file_callback)
             dpg.add_button(label="Delete", callback=delete_file_callback)
+            dpg.add_button(label="Extract", callback=extract_file_callback)
 
 
 def open_dir(dirname: list[str], name: str):
@@ -494,7 +513,7 @@ def load_file_callback():
         enc_file = EncryptrFile(
             dpg.get_value("file_path_input"), dpg.get_value("password_input")
         )
-        print(enc_file.algo_type)
+        print(f"opened {enc_file.file_path}, algo type: {enc_file.algo_type}")
 
         update_file_tree_table()
         dpg.hide_item("file_window")
