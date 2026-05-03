@@ -1,7 +1,10 @@
-from encryptr import EncryptrFile, ALGOS, TEMP_DIR_PATH
 import dearpygui.dearpygui as dpg
+
+dpg.create_context()
+
+from encryptr import ALGOS
+import callbacks
 import utils
-import time
 import os
 import gc
 
@@ -10,11 +13,7 @@ PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
 
-MAX_TRIES_BEFORE_RATE_LIMIT = 3
-RATE_LIMIT_TIME = 30
 
-
-dpg.create_context()
 dpg.create_viewport(title="Encryptr", width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
 
 
@@ -22,12 +21,6 @@ with dpg.theme() as error_theme:
     with dpg.theme_component(dpg.mvText):
         dpg.add_theme_color(
             dpg.mvThemeCol_Text, (255, 51, 51), category=dpg.mvThemeCat_Core
-        )
-
-with dpg.theme() as header_row_theme:
-    with dpg.theme_component(dpg.mvTableRow):
-        dpg.add_theme_color(
-            dpg.mvThemeCol_TableRowBg, (51, 51, 55), category=dpg.mvThemeCat_Core
         )
 
 with dpg.theme() as table_theme:
@@ -61,21 +54,6 @@ def input_window(
     )
 
 
-enc_file = None
-curr_path = []
-auto_lock = False
-
-
-def save_settings_callback():
-    global auto_lock
-
-    dpg.set_global_font_scale(dpg.get_value("font_scale_input"))
-    enc_file.copy_files_on_add = dpg.get_value("copy_files_chechbox")
-    auto_lock = dpg.get_value("auto_lock_checkbox")
-    enc_file.change_algo_type(dpg.get_value("enc_method_combo"))
-    # dpg.hide_item("settings_window")
-
-
 with input_window("Settings", "settings_window"):
     dpg.add_text("Global Settings")
 
@@ -100,7 +78,7 @@ with input_window("Settings", "settings_window"):
 
         dpg.add_checkbox(
             label="Lock on Inactivity",
-            default_value=auto_lock,
+            default_value=callbacks.auto_lock,
             tag="auto_lock_checkbox",
         )
         with dpg.tooltip("auto_lock_checkbox"):
@@ -123,45 +101,21 @@ with input_window("Settings", "settings_window"):
 
     dpg.add_spacer(height=9)
 
-    dpg.add_button(label="Save", callback=save_settings_callback)
-
-
-def save_file_callback():
-    dpg.set_item_label("save_file_btn", "Saving...")
-    enc_file.save()
-    dpg.set_item_label("save_file_btn", "Save File")
-
-
-def create_folder_callback():
-    name = dpg.get_value("folder_name_input")
-
-    try:
-        enc_file.new_dir(curr_path, name)
-        dpg.hide_item("new_folder_window")
-        update_file_tree_table()
-    except Exception as e:
-        dpg.set_value("new_folder_error", str(e))
+    dpg.add_button(label="Save", callback=callbacks.save_settings)
 
 
 with input_window("New folder...", "new_folder_window"):
     dpg.add_input_text(
         label="Folder Name", tag="folder_name_input", width=WINDOW_WIDTH / 5
     )
-    dpg.add_button(label="Create Folder", callback=create_folder_callback)
+    dpg.add_button(label="Create Folder", callback=callbacks.create_folder)
     dpg.add_text(tag="new_folder_error")
     dpg.bind_item_theme("new_folder_error", error_theme)
 
 
-def add_file_dialog_callback(sender, app_data):
-    for name, path in app_data["selections"].items():
-        enc_file.add_file(curr_path, name, path)
-
-    update_file_tree_table()
-
-
 with dpg.file_dialog(
     label="Select file to add...",
-    callback=add_file_dialog_callback,
+    callback=callbacks.add_file_dialog,
     tag="add_file_dialog",
     width=WINDOW_WIDTH / 2,
     height=WINDOW_HEIGHT / 2,
@@ -170,32 +124,18 @@ with dpg.file_dialog(
     dpg.add_file_extension(".*")
 
 
-def change_pw_callback():
-    new_pw = dpg.get_value("new_pw_input")
-
-    try:
-        enc_file.set_password(new_pw)
-        dpg.hide_item("change_pw_window")
-    except Exception as e:
-        dpg.set_value("change_pw_error", str(e))
-
-
 with input_window("Change password...", "change_pw_window"):
     dpg.add_input_text(
         label="New Password", password=True, tag="new_pw_input", width=WINDOW_WIDTH / 5
     )
-    dpg.add_button(label="Change Password", callback=change_pw_callback)
+    dpg.add_button(label="Change Password", callback=callbacks.change_pw)
     dpg.add_text(tag="change_pw_error")
     dpg.bind_item_theme("change_pw_error", error_theme)
 
 
-def save_as_dir_dialog(sender, app_data):
-    dpg.set_value("save_as_dir_input", app_data["file_path_name"])
-
-
 dpg.add_file_dialog(
     directory_selector=True,
-    callback=save_as_dir_dialog,
+    callback=lambda s, a: dpg.set_value("save_as_dir_input", a["file_path_name"]),
     tag="save_as_dir_dialog",
     width=WINDOW_WIDTH / 2,
     height=WINDOW_HEIGHT / 2,
@@ -203,28 +143,7 @@ dpg.add_file_dialog(
 )
 
 
-def save_as_callback():
-    name = dpg.get_value("save_as_name_input")
-    if name == "":
-        dpg.set_value("save_as_error", "Name cannot be empty.")
-        return
-
-    file_path = os.path.join(dpg.get_value("save_as_dir_input"), name + ".enc")
-
-    if os.path.isdir(file_path):
-        dpg.set_value("save_as_error", "File path is a directory.")
-        return
-
-    dpg.set_item_label("save_as_file_button", "Saving...")
-    enc_file.save(file_path)
-    dpg.set_item_label("save_as_file_button", "Save File")
-
-    dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
-
-    dpg.hide_item("save_as_window")
-
-
-with input_window("Save as...", "save_as_window", modal=False):
+with input_window("Save as...", "save_as_window"):
     with dpg.group(horizontal=True):
         dpg.add_input_text(width=WINDOW_WIDTH / 5, tag="save_as_dir_input")
         dpg.add_button(
@@ -235,216 +154,72 @@ with input_window("Save as...", "save_as_window", modal=False):
         label="File Name", width=WINDOW_WIDTH / 5, tag="save_as_name_input"
     )
     dpg.add_button(
-        label="Save File", tag="save_as_file_button", callback=save_as_callback
+        label="Save File", tag="save_as_file_button", callback=callbacks.save_as
     )
     dpg.add_text(tag="save_as_error")
     dpg.bind_item_theme("save_as_error", error_theme)
 
 
-def open_file(dirname: list[str], name: str):
-    def open_file_callback():
-        dpg.set_item_label("open_file_btn", "Opening...")
+with input_window(f"Rename file...", tag="rename_file_window"):
+    dpg.add_input_text(
+        label="New Name", width=WINDOW_WIDTH / 5, tag="rename_file_input"
+    )
+    dpg.add_button(label="Rename", callback=callbacks.rename_file)
 
-        directory = enc_file.get_from_path(dirname)
 
-        if type(directory[name]) == int:
-            temp_file_path = os.path.join(TEMP_DIR_PATH, str(len(dirname)) + name)
+with input_window(f"Delete file...", tag="delete_file_window"):
+    dpg.add_text("Are you sure you want to delete this file?")
 
-            if not os.path.isfile(temp_file_path):
-                with open(temp_file_path, "wb") as f:
-                    f.write(enc_file.get_file_data(dirname, name))
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="Yes", callback=callbacks.delete_file)
+        dpg.add_button(label="No", callback=lambda: dpg.hide_item("delete_file_window"))
 
-            utils.open_file(temp_file_path)
-        elif type(directory[name]) == str:
-            utils.open_file(directory[name])
 
-        dpg.set_item_label("open_file_btn", "Open")
-        dpg.delete_item(file_window)
+dpg.add_file_dialog(
+    label="Extract file to...",
+    directory_selector=True,
+    width=WINDOW_WIDTH / 2,
+    height=WINDOW_HEIGHT / 2,
+    show=False,
+    tag="extract_file_dialog",
+    callback=callbacks.extract_file,
+)
 
-    def rename_file_callback():
-        def rename_callback():
-            directory = enc_file.get_from_path(dirname)
-            directory[dpg.get_value(new_name_input)] = directory.pop(name)
 
-            update_file_tree_table()
-            dpg.delete_item(rename_file_window)
-            dpg.delete_item(file_window)
-
-        with input_window(
-            f"Rename {name}...",
-            show=True,
-            on_close=lambda: dpg.delete_item(rename_file_window),
-        ) as rename_file_window:
-            new_name_input = dpg.add_input_text(
-                label="New Name", width=WINDOW_WIDTH / 5
-            )
-            dpg.add_button(label="Rename", callback=rename_callback)
-
-    def delete_file_callback():
-        enc_file.delete_file(dirname, name)
-        update_file_tree_table()
-        dpg.delete_item(file_window)
-
-    def extract_file_callback():
-        def extract_callback(sender, app_data):
-            extract_file_path = os.path.join(app_data["file_path_name"], name)
-
-            with open(extract_file_path, "wb") as f:
-                f.write(enc_file.get_file_data(dirname, name))
-
-            dpg.delete_item(extract_file_dialog)
-
-        extract_file_dialog = dpg.add_file_dialog(
-            label=f"Extract {name} to...",
-            directory_selector=True,
-            width=WINDOW_WIDTH / 2,
-            height=WINDOW_HEIGHT / 2,
-            callback=extract_callback,
-            cancel_callback=lambda: dpg.delete_item(extract_file_dialog),
+with input_window(f"Open file...", tag="file_window"):
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="Open", callback=callbacks.open_file, tag="open_file_btn")
+        dpg.add_button(
+            label="Rename", callback=lambda: dpg.show_item("rename_file_window")
         )
-
-    with input_window(
-        f"Open {name}...", show=True, on_close=lambda: dpg.delete_item(file_window)
-    ) as file_window:
-        with dpg.group(horizontal=True):
-            dpg.add_button(
-                label="Open", callback=open_file_callback, tag="open_file_btn"
-            )
-            dpg.add_button(label="Rename", callback=rename_file_callback)
-            dpg.add_button(label="Delete", callback=delete_file_callback)
-            dpg.add_button(label="Extract", callback=extract_file_callback)
-
-
-def open_dir(dirname: list[str], name: str):
-    global curr_path
-
-    curr_path = dirname + [name]
-    update_file_tree_table()
-
-
-def add_file_to_cell(name: str, value, dirname: list[str], parent: str = 0):
-    if type(value) == dict:
-        icon = utils.FOLDER_ICON
-        callback = lambda: open_dir(dirname, name)
-    else:
-        icon = utils.get_file_icon(os.path.splitext(name)[1][1:].lower())
-        callback = lambda: open_file(dirname, name)
-
-    label = f"{icon} {name}"
-    dpg.add_button(label=f"{icon} {name}", parent=parent, callback=callback)
-    dpg.add_drag_payload(parent=dpg.last_item(), label=label)
-
-
-def go_to(path: list[str]):
-    global curr_path
-
-    if path == curr_path:
-        return
-
-    curr_path = path
-    update_file_tree_table()
-
-
-def update_file_tree_table():
-    dpg.delete_item("file_tree_table", children_only=True)
-
-    dpg.add_table_column(parent="file_tree_table")
-
-    for dir_name in curr_path:
-        dpg.add_table_column(label=dir_name, parent="file_tree_table")
-
-    # header row
-    with dpg.table_row(parent="file_tree_table"):
-        dpg.bind_item_theme(dpg.last_item(), header_row_theme)
-
-        dpg.add_button(label="/", callback=lambda: go_to([]))
-
-        for i, dir_name in enumerate(curr_path):
-            dpg.add_button(
-                label=dir_name,
-                user_data=curr_path[: i + 1],
-                callback=lambda s, a, d: go_to(d),
-            )
-
-    curr_dir = enc_file.root
-
-    for i, name in enumerate(curr_dir):
-        with dpg.table_row(tag=f"row{i}", parent="file_tree_table"):
-            add_file_to_cell(name, curr_dir[name], [])
-
-    for depth, dir_name in enumerate(curr_path):
-        curr_dir = curr_dir[dir_name]
-
-        for i, name in enumerate(curr_dir):
-            row_tag = f"row{i}"
-            if not dpg.does_item_exist(row_tag):
-                dpg.add_table_row(tag=row_tag)
-
-                for _ in range(depth + 1):
-                    dpg.add_text(parent=row_tag)
-
-            add_file_to_cell(name, curr_dir[name], curr_path[: depth + 1], row_tag)
-
-
-def delete_folder_callback():
-    global curr_path
-
-    enc_file.delete_dir(curr_path)
-    curr_path = curr_path[:-1]
-
-    update_file_tree_table()
-    dpg.hide_item("delete_dir_window")
+        dpg.add_button(
+            label="Delete", callback=lambda: dpg.show_item("delete_file_window")
+        )
+        dpg.add_button(
+            label="Extract", callback=lambda: dpg.show_item("extract_file_dialog")
+        )
 
 
 with input_window("Delete directory...", "delete_dir_window"):
     dpg.add_text(tag="delete_dir_warning")
 
     with dpg.group(horizontal=True):
-        dpg.add_button(label="Yes", callback=delete_folder_callback)
+        dpg.add_button(label="Yes", callback=callbacks.delete_folder)
         dpg.add_button(label="No", callback=lambda: dpg.hide_item("delete_dir_window"))
-
-
-def delete_folder_btn_callback():
-    dpg.set_value(
-        "delete_dir_warning",
-        f'Are you sure you want to delete "{curr_path[-1] if len(curr_path) > 0 else "/"}"?',
-    )
-    dpg.show_item("delete_dir_window")
-
-
-def rename_folder_callback():
-    global curr_path
-
-    new_name = dpg.get_value("rename_folder_input")
-
-    directory = enc_file.get_from_path(curr_path[:-1])
-    directory[new_name] = directory.pop(curr_path[-1])
-    curr_path[-1] = new_name
-
-    update_file_tree_table()
-    dpg.hide_item("rename_folder_window")
 
 
 with input_window(tag="rename_folder_window"):
     dpg.add_input_text(
         label="New Name", width=WINDOW_WIDTH / 5, tag="rename_folder_input"
     )
-    dpg.add_button(label="Rename", callback=rename_folder_callback)
-
-
-def rename_folder_btn_callback():
-    if len(curr_path) == 0:
-        return
-
-    dpg.set_item_label("rename_folder_window", f"Rename {curr_path[-1]}...")
-    dpg.show_item("rename_folder_window")
+    dpg.add_button(label="Rename", callback=callbacks.rename_folder)
 
 
 with dpg.window(tag="main_window", show=False):
     with dpg.menu_bar():
         with dpg.menu(label="File"):
             dpg.add_button(
-                label="Save File", callback=save_file_callback, tag="save_file_btn"
+                label="Save File", callback=callbacks.save_file, tag="save_file_btn"
             )
             dpg.add_button(
                 label="Save As", callback=lambda: dpg.show_item("save_as_window")
@@ -461,8 +236,8 @@ with dpg.window(tag="main_window", show=False):
             dpg.add_button(
                 label="New Folder", callback=lambda: dpg.show_item("new_folder_window")
             )
-            dpg.add_button(label="Rename Folder", callback=rename_folder_btn_callback)
-            dpg.add_button(label="Delete Folder", callback=delete_folder_btn_callback)
+            dpg.add_button(label="Rename Folder", callback=callbacks.rename_folder_btn)
+            dpg.add_button(label="Delete Folder", callback=callbacks.delete_folder_btn)
 
         dpg.add_button(
             label="Settings", callback=lambda: dpg.show_item("settings_window")
@@ -481,13 +256,9 @@ with dpg.window(tag="main_window", show=False):
     dpg.bind_item_theme("file_tree_table", table_theme)
 
 
-def load_file_dialog_callback(sender, app_data):
-    dpg.set_value("file_path_input", app_data["file_path_name"])
-
-
 with dpg.file_dialog(
     label="Select file to load...",
-    callback=load_file_dialog_callback,
+    callback=callbacks.load_file_dialog,
     tag="load_file_dialog",
     width=WINDOW_WIDTH / 2,
     height=WINDOW_HEIGHT / 2,
@@ -496,51 +267,9 @@ with dpg.file_dialog(
     dpg.add_file_extension(".enc")
 
 
-incorrect_tries = 0
-rate_limit_start = None
-
-
-def load_file_callback():
-    global enc_file, incorrect_tries, rate_limit_start
-
-    if (
-        incorrect_tries >= MAX_TRIES_BEFORE_RATE_LIMIT
-        and (time.time() - rate_limit_start) < RATE_LIMIT_TIME
-    ):
-        return
-
-    try:
-        enc_file = EncryptrFile(
-            dpg.get_value("file_path_input"), dpg.get_value("password_input")
-        )
-        print(f"opened {enc_file.file_path}, algo type: {enc_file.algo_type}")
-
-        update_file_tree_table()
-        dpg.hide_item("file_window")
-        dpg.show_item("main_window")
-
-        incorrect_tries = 0
-        dpg.set_value("password_input", "")
-        dpg.set_value("load_file_error", "")
-        dpg.set_value("enc_method_combo", enc_file.algo_type)
-        dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
-    except ValueError:
-        incorrect_tries += 1
-
-        if incorrect_tries > MAX_TRIES_BEFORE_RATE_LIMIT:
-            rate_limit_start = time.time()
-            dpg.set_value(
-                "load_file_error",
-                f"Max incorrect tries reached ({MAX_TRIES_BEFORE_RATE_LIMIT}), please wait {RATE_LIMIT_TIME}s.",
-            )
-        else:
-            dpg.set_value("load_file_error", "Incorrect password.")
-    except Exception as e:
-        print(e)
-        dpg.set_value("load_file_error", str(e))
-
-
-with input_window("Load file...", "file_window", show=True, modal=False, no_close=True):
+with input_window(
+    "Load file...", "load_file_window", show=True, modal=False, no_close=True
+):
     with dpg.group(horizontal=True):
         dpg.add_input_text(width=WINDOW_WIDTH / 5, tag="file_path_input")
         dpg.add_button(
@@ -550,7 +279,7 @@ with input_window("Load file...", "file_window", show=True, modal=False, no_clos
     dpg.add_input_text(
         label="Password", password=True, width=WINDOW_WIDTH / 5, tag="password_input"
     )
-    dpg.add_button(label="Load File", callback=load_file_callback)
+    dpg.add_button(label="Load File", callback=callbacks.load_file)
     dpg.add_text(tag="load_file_error")
     dpg.bind_item_theme("load_file_error", error_theme)
 
@@ -565,7 +294,7 @@ if __name__ == "__main__":
 
     while dpg.is_dearpygui_running():
         if (
-            auto_lock
+            callbacks.auto_lock
             and enc_file
             and dpg.get_frame_count() % 30 == 0
             and not utils.is_app_focused()
@@ -576,7 +305,7 @@ if __name__ == "__main__":
             curr_path = []
             dpg.hide_item("main_window")
             dpg.delete_item("file_tree_table", children_only=True)
-            dpg.show_item("file_window")
+            dpg.show_item("load_file_window")
 
         dpg.render_dearpygui_frame()
 

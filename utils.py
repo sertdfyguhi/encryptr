@@ -40,6 +40,9 @@ FILE_ICONS = {
 
 
 def get_file_icon(extension: str):
+    if not extension:
+        return DEFAULT_FILE_ICON
+
     for exts, icon in FILE_ICONS.items():
         if extension in exts:
             return icon
