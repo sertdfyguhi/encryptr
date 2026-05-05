@@ -1,9 +1,14 @@
 from encryptr import EncryptrFile, TEMP_DIR_PATH
 import dearpygui.dearpygui as dpg
+from settings import AppSettings
 import utils
 import time
 import os
+import gc
 
+
+PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE_PATH = os.path.join(PY_FILE_DIR, "settings.json")
 
 MAX_TRIES_BEFORE_RATE_LIMIT = 3
 RATE_LIMIT_TIME = 30
@@ -16,8 +21,41 @@ with dpg.theme() as header_row_theme:
         )
 
 
+settings = AppSettings.from_file(SETTINGS_FILE_PATH)
+dpg.set_global_font_scale(settings.font_scale)
+
 enc_file = None
 curr_path = []
+
+last_mouse_move = None
+
+
+def mouse_move():
+    global last_mouse_move
+
+    if settings.auto_lock_inactivity:
+        last_mouse_move = time.time()
+
+
+with dpg.handler_registry():
+    dpg.add_mouse_move_handler(callback=mouse_move)
+
+
+def main_loop():
+    global enc_file, curr_path
+
+    if enc_file and dpg.get_frame_count() % 30 == 0:
+        if (settings.auto_lock_unfocus and not utils.is_app_focused()) or (
+            settings.auto_lock_inactivity
+            and (time.time() - last_mouse_move) > settings.auto_lock_inactivity_time
+        ):
+            enc_file = None
+            gc.collect()
+
+            curr_path = []
+            dpg.hide_item("main_window")
+            dpg.delete_item("file_tree_table", children_only=True)
+            dpg.show_item("load_file_window")
 
 
 def select_file(path: list[str], name: str):
@@ -102,16 +140,21 @@ def update_file_tree_table():
 
 
 # callbacks
-auto_lock = False
 
 
 def save_settings():
-    global auto_lock
+    settings.font_scale = dpg.get_value("font_scale_input")
+    settings.copy_files_on_add = dpg.get_value("copy_files_chechbox")
+    settings.auto_lock_inactivity = dpg.get_value("auto_lock_inactivity_checkbox")
+    if settings.auto_lock_inactivity:
+        settings.auto_lock_inactivity_time = dpg.get_value("auto_lock_inactivity_input")
+    settings.auto_lock_unfocus = dpg.get_value("auto_lock_unfocus_checkbox")
 
-    dpg.set_global_font_scale(dpg.get_value("font_scale_input"))
-    enc_file.copy_files_on_add = dpg.get_value("copy_files_chechbox")
-    auto_lock = dpg.get_value("auto_lock_checkbox")
+    dpg.set_global_font_scale(settings.font_scale)
+    enc_file.copy_files_on_add = settings.copy_files_on_add
     enc_file.change_algo_type(dpg.get_value("enc_method_combo"))
+
+    settings.save(SETTINGS_FILE_PATH)
     # dpg.hide_item("settings_window")
 
 
@@ -285,7 +328,9 @@ def load_file():
 
     try:
         enc_file = EncryptrFile(
-            dpg.get_value("file_path_input"), dpg.get_value("password_input")
+            dpg.get_value("file_path_input"),
+            dpg.get_value("password_input"),
+            settings.copy_files_on_add,
         )
         print(f"opened {enc_file.file_path}, algo type: {enc_file.algo_type}")
 

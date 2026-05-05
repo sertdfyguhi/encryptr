@@ -4,11 +4,8 @@ dpg.create_context()
 
 from encryptr import ALGOS
 import callbacks
-import utils
 import os
-import gc
 
-PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
@@ -32,7 +29,10 @@ with dpg.theme() as table_theme:
 
 with dpg.font_registry():
     default_font = dpg.add_font(
-        os.path.join(PY_FILE_DIR, "font", "SFMono Regular Nerd Font Complete.otf"), 14
+        os.path.join(
+            callbacks.PY_FILE_DIR, "font", "SFMono Regular Nerd Font Complete.otf"
+        ),
+        14,
     )
     # bold_font = dpg.add_font(
     #     os.path.join(font_dir_path, "SFMono Bold Nerd Font Complete.otf"), 14
@@ -61,7 +61,7 @@ with input_window("Settings", "settings_window"):
         dpg.add_input_float(
             label="Font Scale",
             tag="font_scale_input",
-            default_value=dpg.get_global_font_scale(),
+            default_value=callbacks.settings.font_scale,
             min_value=0.1,
             max_value=3.0,
             format="%.1f",
@@ -69,7 +69,9 @@ with input_window("Settings", "settings_window"):
         )
 
         dpg.add_checkbox(
-            label="Copy Files on Add", default_value=False, tag="copy_files_chechbox"
+            label="Copy Files on Add",
+            default_value=callbacks.settings.copy_files_on_add,
+            tag="copy_files_chechbox",
         )
         with dpg.tooltip("copy_files_chechbox"):
             dpg.add_text(
@@ -78,10 +80,33 @@ with input_window("Settings", "settings_window"):
 
         dpg.add_checkbox(
             label="Lock on Inactivity",
-            default_value=callbacks.auto_lock,
-            tag="auto_lock_checkbox",
+            default_value=callbacks.settings.auto_lock_inactivity,
+            tag="auto_lock_inactivity_checkbox",
+            callback=lambda: (
+                dpg.hide_item("inactivity_time_input")
+                if dpg.is_item_visible("inactivity_time_input")
+                else dpg.show_item("inactivity_time_input")
+            ),
         )
-        with dpg.tooltip("auto_lock_checkbox"):
+        with dpg.tooltip("auto_lock_inactivity_checkbox"):
+            dpg.add_text(
+                "If enabled, auto unloads the file when user is inactive for 5 minutes.",
+            )
+
+        dpg.add_input_int(
+            label="Inactivity Time",
+            default_value=callbacks.settings.auto_lock_inactivity_time,
+            width=WINDOW_WIDTH / 5,
+            tag="inactivity_time_input",
+            show=callbacks.settings.auto_lock_inactivity,
+        )
+
+        dpg.add_checkbox(
+            label="Lock on Unfocus",
+            default_value=callbacks.settings.auto_lock_unfocus,
+            tag="auto_lock_unfocus_checkbox",
+        )
+        with dpg.tooltip("auto_lock_unfocus_checkbox"):
             dpg.add_text(
                 "If enabled, auto unloads the file when window is unfocused.",
             )
@@ -160,14 +185,14 @@ with input_window("Save as...", "save_as_window"):
     dpg.bind_item_theme("save_as_error", error_theme)
 
 
-with input_window(f"Rename file...", tag="rename_file_window"):
+with input_window("Rename file...", "rename_file_window"):
     dpg.add_input_text(
         label="New Name", width=WINDOW_WIDTH / 5, tag="rename_file_input"
     )
     dpg.add_button(label="Rename", callback=callbacks.rename_file)
 
 
-with input_window(f"Delete file...", tag="delete_file_window"):
+with input_window("Delete file...", "delete_file_window"):
     dpg.add_text("Are you sure you want to delete this file?")
 
     with dpg.group(horizontal=True):
@@ -293,20 +318,7 @@ if __name__ == "__main__":
     dpg.show_viewport()
 
     while dpg.is_dearpygui_running():
-        if (
-            callbacks.auto_lock
-            and enc_file
-            and dpg.get_frame_count() % 30 == 0
-            and not utils.is_app_focused()
-        ):
-            enc_file = None
-            gc.collect()
-
-            curr_path = []
-            dpg.hide_item("main_window")
-            dpg.delete_item("file_tree_table", children_only=True)
-            dpg.show_item("load_file_window")
-
+        callbacks.main_loop()
         dpg.render_dearpygui_frame()
 
     dpg.destroy_context()
