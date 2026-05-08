@@ -1,6 +1,6 @@
-from encryptr import EncryptrFile, TEMP_DIR_PATH
 import dearpygui.dearpygui as dpg
 from settings import AppSettings
+import encryptr
 import utils
 import time
 import os
@@ -145,6 +145,7 @@ def update_file_tree_table():
 def save_settings():
     settings.font_scale = dpg.get_value("font_scale_input")
     settings.copy_files_on_add = dpg.get_value("copy_files_chechbox")
+    settings.secure_delete = dpg.get_value("secure_delete_checkbox")
     settings.auto_lock_inactivity = dpg.get_value("auto_lock_inactivity_checkbox")
     if settings.auto_lock_inactivity:
         settings.auto_lock_inactivity_time = dpg.get_value("auto_lock_inactivity_input")
@@ -152,6 +153,7 @@ def save_settings():
 
     dpg.set_global_font_scale(settings.font_scale)
     enc_file.copy_files_on_add = settings.copy_files_on_add
+    encryptr.secure_delete = settings.secure_delete
     enc_file.change_algo_type(dpg.get_value("enc_method_combo"))
 
     settings.save(SETTINGS_FILE_PATH)
@@ -228,7 +230,7 @@ def open_file():
         pass
     if type(directory[open_file_name]) == int:
         temp_file_path = os.path.join(
-            TEMP_DIR_PATH, str(len(open_file_path)) + open_file_name
+            enc_file.temp_dir_path, str(len(open_file_path)) + open_file_name
         )
 
         if not os.path.isfile(temp_file_path):
@@ -250,7 +252,6 @@ def rename_file():
     update_file_tree_table()
     dpg.hide_item("rename_file_window")
     dpg.set_value("rename_file_input", "")
-    dpg.hide_item("rename_file_window")
     dpg.hide_item("file_window")
 
 
@@ -327,7 +328,7 @@ def load_file():
         return
 
     try:
-        enc_file = EncryptrFile(
+        enc_file = encryptr.EncryptrFile(
             dpg.get_value("file_path_input"),
             dpg.get_value("password_input"),
             settings.copy_files_on_add,

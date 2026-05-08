@@ -11,9 +11,10 @@ import os
 FILE_SIG = b"ENCR\x01\x02"
 FORMAT_VERSION = 1
 ALGOS = {1: "AES256-GCM", 2: "ChaCha20-Poly1305"}
-ALGOS_NAME_KEY = {"AES256-GCM": 1, "ChaCha20-Poly1305": 2}
+ALGOS_NAME_KEY = {value: key for key, value in ALGOS.items()}
 
-TEMP_DIR_PATH = tempfile.mkdtemp()
+secure_delete = True
+temp_dir_paths = []
 
 
 class EncryptrFile:
@@ -34,6 +35,11 @@ class EncryptrFile:
                     raise ValueError("File isn't an Encryptr file.")
 
                 file_format_ver = int.from_bytes(f.read(8), "big")
+                if file_format_ver != FORMAT_VERSION:
+                    raise ValueError(
+                        f"Unsupported .enc file version {file_format_ver}."
+                    )
+
                 self._algo_type = int.from_bytes(f.read(8), "big")
                 if self._algo_type not in ALGOS:
                     raise ValueError("Algorithm type unsupported.")
@@ -54,6 +60,10 @@ class EncryptrFile:
             self._algo_type = 1  # AES
             self._saved_key = None
 
+        # make temp dir for file
+        self._temp_dir_path = tempfile.mkdtemp()
+        temp_dir_paths.append(self._temp_dir_path)
+
     @property
     def root(self):
         return self._root
@@ -66,9 +76,16 @@ class EncryptrFile:
     def algo_type(self):
         return ALGOS[self._algo_type]
 
-    def set_password(self, password: str, salt: bytes = os.urandom(16)):
+    @property
+    def temp_dir_path(self):
+        return self._temp_dir_path
+
+    def set_password(self, password: str, salt: bytes | None = None):
         if password == "":
             raise ValueError("Password cannot be empty.")
+
+        if salt is None:
+            salt = os.urandom(16)
 
         self._salt = salt
         self._key = hash_secret_raw(
@@ -87,9 +104,10 @@ class EncryptrFile:
 
         self._algo_type = ALGOS_NAME_KEY[algo]
 
-    def _make_algo_class(
-        self, key: bytes, algo_type: int, nonce: bytes = os.urandom(12)
-    ):
+    def _make_algo_class(self, key: bytes, algo_type: int, nonce: bytes | None = None):
+        if nonce is None:
+            nonce = os.urandom(12)
+
         match algo_type:
             case 1:
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -179,7 +197,7 @@ class EncryptrFile:
                 read_file = None
             else:
                 temp_file_path = os.path.join(
-                    TEMP_DIR_PATH, os.path.basename(file_path)
+                    self._temp_dir_path, os.path.basename(file_path)
                 )
                 read_file = (
                     open(self._file_path, "rb")
@@ -276,7 +294,7 @@ class EncryptrFile:
             self._new_files.append((path, name))
 
         if self.copy_files_on_add:
-            copy_dest = os.path.join(TEMP_DIR_PATH, str(len(path)) + name)
+            copy_dest = os.path.join(self._temp_dir_path, str(len(path)) + name)
             shutil.copyfile(file_path, copy_dest)
             directory[name] = copy_dest
         else:
@@ -314,14 +332,29 @@ class EncryptrFile:
             directory = self.get_from_path(path[:-1])
 
             if path[-1] in directory:
-                if not directory[path[-1]]:  # if not empty
+                if directory[path[-1]]:  # if not empty
                     self._has_edited_files = True
 
                 del directory[path[-1]]
 
 
 def cleanup_temp():
-    shutil.rmtree(TEMP_DIR_PATH)
+    for path in temp_dir_paths:
+        if secure_delete:
+            for file in os.listdir(path):
+                file_path = os.path.join(path, file)
+
+                if os.path.isfile(file_path):
+                    length = os.path.getsize(file_path)
+
+                    with open(file_path, "r+b", buffering=0) as f:
+                        f.write(os.urandom(length))
+                        f.flush()
+                        os.fsync(f.fileno())
+
+                    os.remove(file_path)
+        else:
+            shutil.rmtree(path)
 
 
 atexit.register(cleanup_temp)

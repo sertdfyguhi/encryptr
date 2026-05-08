@@ -79,6 +79,16 @@ with input_window("Settings", "settings_window"):
             )
 
         dpg.add_checkbox(
+            label="Secure Delete",
+            default_value=callbacks.settings.secure_delete,
+            tag="secure_delete_checkbox",
+        )
+        with dpg.tooltip("secure_delete_checkbox"):
+            dpg.add_text(
+                "If enabled, deletes temporary files used to open files securely.",
+            )
+
+        dpg.add_checkbox(
             label="Lock on Inactivity",
             default_value=callbacks.settings.auto_lock_inactivity,
             tag="auto_lock_inactivity_checkbox",
