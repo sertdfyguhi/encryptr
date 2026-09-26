@@ -1,14 +1,15 @@
+from platformdirs import user_config_path
 import dearpygui.dearpygui as dpg
-from settings import AppSettings
-import encryptr
-import utils
+from .settings import AppSettings
+from . import utils, encryptr
 import time
 import os
 import gc
 
-
 PY_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE_PATH = os.path.join(PY_FILE_DIR, "settings.json")
+CONIFG_DIR_PATH = user_config_path(appname="encryptr")
+CONIFG_DIR_PATH.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE_PATH = CONIFG_DIR_PATH / "settings.json"
 
 MAX_TRIES_BEFORE_RATE_LIMIT = 3
 RATE_LIMIT_TIME = 30
@@ -23,6 +24,7 @@ with dpg.theme() as header_row_theme:
 
 settings = AppSettings.from_file(SETTINGS_FILE_PATH)
 dpg.set_global_font_scale(settings.font_scale)
+encryptr.secure_delete = settings.secure_delete
 
 enc_file = None
 curr_path = []
@@ -47,8 +49,10 @@ def main_loop():
     if enc_file and dpg.get_frame_count() % 30 == 0:
         if (settings.auto_lock_unfocus and not utils.is_app_focused()) or (
             settings.auto_lock_inactivity
+            and last_mouse_move is not None
             and (time.time() - last_mouse_move) > settings.auto_lock_inactivity_time
         ):
+            enc_file.close()
             enc_file = None
             gc.collect()
 
@@ -191,6 +195,7 @@ def change_pw():
 
     try:
         enc_file.set_password(new_pw)
+        dpg.set_value("new_pw_input", "")
         dpg.hide_item("change_pw_window")
     except Exception as e:
         dpg.set_value("change_pw_error", str(e))
@@ -229,8 +234,8 @@ def open_file():
     if open_file_name.endswith(("txt", "md", "rtf", "log")):
         pass
     if type(directory[open_file_name]) == int:
-        temp_file_path = os.path.join(
-            enc_file.temp_dir_path, str(len(open_file_path)) + open_file_name
+        temp_file_path = utils.make_temp_path(
+            enc_file.temp_dir_path, open_file_path, open_file_name
         )
 
         if not os.path.isfile(temp_file_path):
@@ -246,8 +251,9 @@ def open_file():
 
 
 def rename_file():
-    directory = enc_file.get_from_path(open_file_path)
-    directory[dpg.get_value("rename_file_input")] = directory.pop(open_file_name)
+    enc_file.rename_file(
+        open_file_path, open_file_name, dpg.get_value("rename_file_input")
+    )
 
     update_file_tree_table()
     dpg.hide_item("rename_file_window")
@@ -263,7 +269,9 @@ def delete_file():
 
 
 def extract_file(sender, app_data):
-    extract_file_path = os.path.join(app_data["file_path_name"], open_file_name)
+    extract_file_path = os.path.join(
+        app_data["file_path_name"], os.path.basename(open_file_name)
+    )
 
     with open(extract_file_path, "wb") as f:
         f.write(enc_file.get_file_data(open_file_path, open_file_name))
@@ -293,9 +301,7 @@ def rename_folder():
     global curr_path
 
     new_name = dpg.get_value("rename_folder_input")
-
-    directory = enc_file.get_from_path(curr_path[:-1])
-    directory[new_name] = directory.pop(curr_path[-1])
+    enc_file.rename_dir(curr_path, new_name)
     curr_path[-1] = new_name
 
     update_file_tree_table()
@@ -315,11 +321,11 @@ def load_file_dialog(sender, app_data):
 
 
 incorrect_tries = 0
-rate_limit_start = None
+rate_limit_start = None  # can try to implement persistance between sessions
 
 
 def load_file():
-    global enc_file, incorrect_tries, rate_limit_start
+    global enc_file, incorrect_tries, rate_limit_start, open_file_name, open_file_path
 
     if (
         incorrect_tries >= MAX_TRIES_BEFORE_RATE_LIMIT
@@ -328,33 +334,43 @@ def load_file():
         return
 
     try:
-        enc_file = encryptr.EncryptrFile(
+        new_file = encryptr.EncryptrFile(
             dpg.get_value("file_path_input"),
             dpg.get_value("password_input"),
             settings.copy_files_on_add,
         )
-        print(f"opened {enc_file.file_path}, algo type: {enc_file.algo_type}")
+        print(f"opened {new_file.file_path}, algo type: {new_file.algo_type}")
 
+        # only drop the old file once the new one has opened successfully
+        if enc_file is not None:
+            enc_file.close()
+
+        enc_file = new_file
         update_file_tree_table()
         dpg.hide_item("load_file_window")
         dpg.show_item("main_window")
 
         incorrect_tries = 0
+        open_file_path = None
+        open_file_name = None
         dpg.set_value("password_input", "")
         dpg.set_value("load_file_error", "")
         dpg.set_value("enc_method_combo", enc_file.algo_type)
         dpg.set_viewport_title(f"Encryptr - {enc_file.file_path}")
-    except ValueError:
-        incorrect_tries += 1
+    except ValueError as e:
+        if str(e) == "Incorrect password.":
+            incorrect_tries += 1
 
-        if incorrect_tries > MAX_TRIES_BEFORE_RATE_LIMIT:
-            rate_limit_start = time.time()
-            dpg.set_value(
-                "load_file_error",
-                f"Max incorrect tries reached ({MAX_TRIES_BEFORE_RATE_LIMIT}), please wait {RATE_LIMIT_TIME}s.",
-            )
+            if incorrect_tries >= MAX_TRIES_BEFORE_RATE_LIMIT:
+                rate_limit_start = time.time()
+                dpg.set_value(
+                    "load_file_error",
+                    f"Max incorrect tries reached ({MAX_TRIES_BEFORE_RATE_LIMIT}), please wait {RATE_LIMIT_TIME}s.",
+                )
+            else:
+                dpg.set_value("load_file_error", "Incorrect password.")
         else:
-            dpg.set_value("load_file_error", "Incorrect password.")
+            dpg.set_value("load_file_error", str(e))
     except Exception as e:
         print(e)
         dpg.set_value("load_file_error", str(e))

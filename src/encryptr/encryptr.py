@@ -1,9 +1,12 @@
 from Crypto.Cipher import AES, ChaCha20_Poly1305
 from argon2.low_level import hash_secret_raw
+from .utils import make_temp_path
 from argon2 import Type
 import tempfile
+import weakref
 import atexit
 import shutil
+import signal
 import json
 import time
 import os
@@ -12,6 +15,8 @@ FILE_SIG = b"ENCR\x01\x02"
 FORMAT_VERSION = 1
 ALGOS = {1: "AES256-GCM", 2: "ChaCha20-Poly1305"}
 ALGOS_NAME_KEY = {value: key for key, value in ALGOS.items()}
+
+OVERWRITE_BLOCK_SIZE = 1024 * 1024
 
 secure_delete = True
 temp_dir_paths = []
@@ -50,7 +55,12 @@ class EncryptrFile:
                 self._saved_key = self._key
 
                 f.seek(0, os.SEEK_END)
-                raw_root_json = self._decrypt_chunk_from_file(f, reverse=True)
+
+                try:
+                    raw_root_json = self._decrypt_chunk_from_file(f, reverse=True)
+                except ValueError:  # MAC check failed
+                    raise ValueError("Incorrect password.")
+
                 self._root = json.loads(raw_root_json.decode("ascii"))
                 if type(self._root) != dict:
                     raise ValueError("Incorrect metadata format.")
@@ -61,8 +71,13 @@ class EncryptrFile:
             self._saved_key = None
 
         # make temp dir for file
-        self._temp_dir_path = tempfile.mkdtemp()
+        self._temp_dir_path = tempfile.mkdtemp(prefix="encryptr-")
         temp_dir_paths.append(self._temp_dir_path)
+
+        # backstop in case close() is never called
+        self._temp_dir_finalizer = weakref.finalize(
+            self, remove_temp_dir, self._temp_dir_path
+        )
 
     @property
     def root(self):
@@ -79,6 +94,10 @@ class EncryptrFile:
     @property
     def temp_dir_path(self):
         return self._temp_dir_path
+
+    def close(self):
+        if self._temp_dir_finalizer.alive:
+            self._temp_dir_finalizer()
 
     def set_password(self, password: str, salt: bytes | None = None):
         if password == "":
@@ -102,7 +121,9 @@ class EncryptrFile:
         if algo not in ALGOS_NAME_KEY:
             raise ValueError(f'"{algo}" is not an algorithm type.')
 
-        self._algo_type = ALGOS_NAME_KEY[algo]
+        if self._algo_type != ALGOS_NAME_KEY[algo]:
+            self._algo_type = ALGOS_NAME_KEY[algo]
+            self._has_edited_files = True
 
     def _make_algo_class(self, key: bytes, algo_type: int, nonce: bytes | None = None):
         if nonce is None:
@@ -145,6 +166,7 @@ class EncryptrFile:
             file.seek(-(12 + 16 + 8 + length), os.SEEK_CUR)
 
         cipher = self._make_algo_class(self._saved_key, self._saved_algo_type, nonce)
+        # length can be manipulated to cause memory error
         return cipher.decrypt_and_verify(file.read(length), tag)
 
     def _copy_chunk_into_file(self, read_file, write_file):
@@ -164,7 +186,10 @@ class EncryptrFile:
                 read_file.seek(value)
                 directory[name] = write_file.tell()
 
-                if self._saved_key == self._key:  # password hasn't c´hanged
+                if (
+                    self._saved_key == self._key
+                    and self._saved_algo_type == self._algo_type
+                ):  # password and algorithm hasn't c´hanged
                     self._copy_chunk_into_file(read_file, write_file)
                 else:
                     data = self._decrypt_chunk_from_file(read_file)
@@ -234,7 +259,9 @@ class EncryptrFile:
 
                 self._write_metadata(write_file)
 
-        print(f"saved in {time.perf_counter() - save_start:.03f}s")
+        print(
+            f"saved in {time.perf_counter() - save_start:.03f}s, algo type: {ALGOS[self._algo_type]}"
+        )
 
         self._saved_key = self._key
         self._saved_algo_type = self._algo_type
@@ -294,7 +321,7 @@ class EncryptrFile:
             self._new_files.append((path, name))
 
         if self.copy_files_on_add:
-            copy_dest = os.path.join(self._temp_dir_path, str(len(path)) + name)
+            copy_dest = make_temp_path(self._temp_dir_path, path, name)
             shutil.copyfile(file_path, copy_dest)
             directory[name] = copy_dest
         else:
@@ -309,7 +336,9 @@ class EncryptrFile:
             raise ValueError("Path cannot point to a file, must be a directory.")
 
         if name in directory:
-            if type(directory[name]) == str:
+            if type(directory[name]) == str and directory[name].startswith(
+                self._temp_dir_path
+            ):
                 try:
                     os.remove(directory[name])
                 except FileNotFoundError:
@@ -332,29 +361,107 @@ class EncryptrFile:
             directory = self.get_from_path(path[:-1])
 
             if path[-1] in directory:
-                if directory[path[-1]]:  # if not empty
+                if directory[path[-1]]:
                     self._has_edited_files = True
 
                 del directory[path[-1]]
 
+    def rename_file(self, path: list[str], name: str, new_name: str):
+        if name == "" or new_name == "":
+            raise ValueError("Filename cannot be empty.")
+
+        directory = self.get_from_path(path)
+
+        if new_name in directory:
+            raise ValueError(
+                "Cannot rename file to already existing filename or directory name."
+            )
+
+        directory[new_name] = directory.pop(name)
+
+        if (path, name) in self._new_files:
+            self._new_files.remove((path, name))
+            self._new_files.append((path, new_name))
+
+    def rename_dir(self, path: list[str], new_name: str):
+        if len(path) == 0:
+            raise ValueError("Cannot rename root directory.")
+
+        if new_name == "":
+            raise ValueError("Directory name cannot be empty.")
+
+        directory = self.get_from_path(path[:-1])
+
+        if new_name in directory:
+            raise ValueError(
+                "Cannot rename directory to already existing filename or directory name."
+            )
+
+        directory[new_name] = directory.pop(path[-1])
+
+
+def wipe_temp_dir(path: str, overwrite: bool = True):
+    if not os.path.isdir(path):
+        return
+
+    if overwrite:
+        for file in os.listdir(path):
+            file_path = os.path.join(path, file)
+
+            if not os.path.isfile(file_path):
+                continue
+
+            try:
+                length = os.path.getsize(file_path)
+
+                with open(file_path, "r+b", buffering=0) as f:
+                    remaining = length
+
+                    while remaining > 0:
+                        block = min(OVERWRITE_BLOCK_SIZE, remaining)
+                        f.write(os.urandom(block))
+                        remaining -= block
+
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError as e:
+                print(f"couldn't overwrite {file_path}: {e}")
+
+    # the dir is removed either way, the setting only controls the overwrite
+    try:
+        shutil.rmtree(path)
+    except OSError as e:
+        print(f"couldn't remove temp dir {path}: {e}")
+
+
+def remove_temp_dir(path: str):
+    if path in temp_dir_paths:
+        temp_dir_paths.remove(path)
+
+    wipe_temp_dir(path, secure_delete)
+
 
 def cleanup_temp():
-    for path in temp_dir_paths:
-        if secure_delete:
-            for file in os.listdir(path):
-                file_path = os.path.join(path, file)
+    # snapshot so the setting can't change midway through, and so removing a
+    # path from the list while iterating can't skip entries
+    for path in list(temp_dir_paths):
+        remove_temp_dir(path)
 
-                if os.path.isfile(file_path):
-                    length = os.path.getsize(file_path)
 
-                    with open(file_path, "r+b", buffering=0) as f:
-                        f.write(os.urandom(length))
-                        f.flush()
-                        os.fsync(f.fileno())
-
-                    os.remove(file_path)
-        else:
-            shutil.rmtree(path)
+def exit_handler(sig, frame):
+    # atexit doesn't run when a signal ends the process, but raising here does
+    raise SystemExit(128 + sig)
 
 
 atexit.register(cleanup_temp)
+
+for sig_name in ("SIGTERM", "SIGHUP"):
+    sig = getattr(signal, sig_name, None)
+
+    if sig is None:
+        continue
+
+    try:
+        signal.signal(sig, exit_handler)
+    except OSError, ValueError:
+        pass

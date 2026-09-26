@@ -2,10 +2,9 @@ import dearpygui.dearpygui as dpg
 
 dpg.create_context()
 
-from encryptr import ALGOS
-import callbacks
+from .encryptr import ALGOS
+from . import callbacks
 import os
-
 
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
@@ -79,13 +78,15 @@ with input_window("Settings", "settings_window"):
             )
 
         dpg.add_checkbox(
-            label="Secure Delete",
+            label="Overwrite Temp Files",
             default_value=callbacks.settings.secure_delete,
             tag="secure_delete_checkbox",
         )
         with dpg.tooltip("secure_delete_checkbox"):
             dpg.add_text(
-                "If enabled, deletes temporary files used to open files securely.",
+                "Overwrites temporary decrypted copies before deleting them.\n"
+                "Best effort only: SSDs, snapshots and backups may keep copies.\n"
+                "Temp files are always deleted when you close the file or quit.",
             )
 
         dpg.add_checkbox(
@@ -323,7 +324,8 @@ dpg.bind_font(default_font)
 dpg.set_primary_window("main_window", True)
 dpg.set_viewport_vsync(True)
 
-if __name__ == "__main__":
+
+def main():
     dpg.setup_dearpygui()
     dpg.show_viewport()
 
@@ -332,3 +334,7 @@ if __name__ == "__main__":
         dpg.render_dearpygui_frame()
 
     dpg.destroy_context()
+
+
+if __name__ == "__main__":
+    main()

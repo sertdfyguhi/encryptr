@@ -1,6 +1,8 @@
 import subprocess
 import platform
+import hashlib
 import os
+import re
 
 FOLDER_ICON = "\uf07b"
 DEFAULT_FILE_ICON = "\uf15b"
@@ -73,7 +75,7 @@ elif platform.system() == "Darwin":
             return True
 
     def open_file(file_path: str):
-        subprocess.run(["open", file_path])
+        subprocess.run(["open", "--", file_path])
 
 else:
 
@@ -81,4 +83,27 @@ else:
         return True
 
     def open_file(file_path: str):
-        subprocess.run(["xdg-open", file_path])
+        subprocess.run(["xdg-open", "--", file_path])
+
+
+# from ai
+# The extension comes from an untrusted source: manifest keys reach this code
+# via open_file, and encryptr.py only checks `type(self._root) == dict` on load.
+# Allowlist it hard rather than trying to strip "bad" characters.
+_SAFE_EXT = re.compile(r"\A\.[A-Za-z0-9]{1,16}\Z")
+
+
+def _safe_ext(name: str) -> str:
+    ext = os.path.splitext(name)[1]
+    return ext if _SAFE_EXT.match(ext) else ""
+
+
+def make_temp_path(temp_dir: str, path: list[str], name: str) -> str:
+    h = hashlib.blake2b(digest_size=16)
+
+    for part in [*path, name]:
+        b = part.encode("utf-8", "surrogateescape")
+        h.update(len(b).to_bytes(4, "big"))
+        h.update(b)
+
+    return os.path.join(temp_dir, h.hexdigest() + _safe_ext(name))

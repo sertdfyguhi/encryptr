@@ -1,4 +1,4 @@
-from encryptr import EncryptrFile
+from encryptr.encryptr import EncryptrFile
 
 file = EncryptrFile("test.enc", "password")
 file.root["test.txt"] = b"test"
